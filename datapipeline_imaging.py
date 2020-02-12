@@ -42,17 +42,18 @@ def populatemytables_gt_core(arguments,runround):
     if runround ==1:
         imaging_gt.GroundTruthROI().populate(**arguments)
 
-def populatemytables_gt(paralel = True, cores = 6):
+def populatemytables_gt(paralel = True, cores = 3):
 
     ray.init(num_cpus = cores)
     for runround in [1]:
         arguments = {'display_progress' : False, 'reserve_jobs' : True,'order' : 'random'}
         print('round '+str(runround)+' of populate')
-        result_ids = []
-        for coreidx in range(cores):
-            result_ids.append(populatemytables_gt_core_paralel.remote(arguments,runround))        
-        ray.get(result_ids)
-        arguments = {'display_progress' : True, 'reserve_jobs' : False}
+        if paralel and cores>1:
+            result_ids = []
+            for coreidx in range(cores):
+                result_ids.append(populatemytables_gt_core_paralel.remote(arguments,runround))        
+            ray.get(result_ids)
+            arguments = {'display_progress' : True, 'reserve_jobs' : False}
         populatemytables_gt_core(arguments,runround)
     ray.shutdown()
 
@@ -841,7 +842,7 @@ def save_volpy_pipeline():
 
 
 #%% Xcorrelation for each sweep  and ROIAPwaves
-def upload_gt_correlations_apwaves(cores = 6):
+def upload_gt_correlations_apwaves(cores = 3):
     subject_ids = ephys_patch.Cell().fetch('subject_id')
     sessions = ephys_patch.Cell().fetch('session')
     cellnums = ephys_patch.Cell().fetch('cell_number')
