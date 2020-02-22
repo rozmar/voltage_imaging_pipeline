@@ -49,7 +49,7 @@ class MotionCorrectionMethod(dj.Lookup):
     #
     motion_correction_method  :  varchar(30)
     """
-    contents = zip(['Matlab','VolPy','Suite2P'])
+    contents = zip(['Matlab','VolPy','Suite2P','VolPy2x'])
 
 @schema
 class RegisteredMovie(dj.Imported): #MovieFile
@@ -77,7 +77,7 @@ class ROIType(dj.Lookup):
     #
     roi_type  :  varchar(30)
     """
-    contents = zip(['SpikePursuit','SpikePursuit_dexpF0','Suite2P','VolPy','VolPy_dexpF0'])
+    contents = zip(['SpikePursuit','SpikePursuit_dexpF0','Suite2P','VolPy','VolPy_dexpF0','VolPy_denoised','Volpy_denoised_dexpF0'])
 
 @schema
 class ROI(dj.Imported): 
