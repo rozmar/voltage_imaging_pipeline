@@ -10,6 +10,7 @@ with open('dj_local_conf.json', 'w') as outfile:
 #import datapipeline_behavior
 #import datapipeline_elphys
 import datapipeline_imaging
+homefolder = '/nrs/svoboda/rozsam'
 #%%
 # =============================================================================
 # datapipeline_metadata.populatemetadata()
@@ -23,8 +24,8 @@ import datapipeline_imaging
 #datapipeline_imaging.calculate_exposition_times()
 
 #datapipeline_imaging.save_spikepursuit_pipeline()
-#datapipeline_imaging.save_volpy_pipeline()
-
-#datapipeline_imaging.upload_gt_correlations_apwaves()
-datapipeline_imaging.populatemytables_gt(cores = 1)
+#datapipeline_imaging.save_volpy_pipeline(roitype = 'VolPy',motion_corr = 'VolPy')
+#datapipeline_imaging.save_volpy_pipeline(roitype = 'VolPy_denoised',motion_corr = 'VolPy2x')
+datapipeline_imaging.upload_gt_correlations_apwaves(cores = 2)
+datapipeline_imaging.populatemytables_gt(cores = 2)
 print('done')

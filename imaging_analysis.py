@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 import datajoint as dj
+import os
 dj.conn()
 from pipeline import pipeline_tools
 from pipeline import lab, experiment, ephys_patch, ephysanal, imaging, imaging_gt
@@ -12,29 +13,50 @@ from plot_imaging.plot_main import *
 font = {'size'   : 16}
 
 matplotlib.rc('font', **font)
-#%% Precision and recall of spike times
-binwidth = 30 #s
-firing_rate_window = 3 #s
-frbinwidth = .01
+from pathlib import Path
 
-roi_type = 'VolPy'#'VolPy_dexpF0'#'SpikePursuit_dexpF0'#'VolPy'#'Spikepursuit'#
+homefolder = '/nrs/svoboda/rozsam'
+#homefolder = str(Path.home())
+
+#%% Precision and recall of spike times
+roi_type = 'Spikepursuit'#'VolPy_denoised'#'SpikePursuit'#'VolPy_dexpF0'#'VolPy'#'SpikePursuit_dexpF0'#'VolPy_dexpF0'#''Spikepursuit'#'VolPy'#
 key = {'roi_type':roi_type}
 gtdata = pd.DataFrame((imaging_gt.GroundTruthROI()&key))
-#%
 cells = gtdata.groupby(['session', 'subject_id','cell_number','motion_correction_method','roi_type']).size().reset_index(name='Freq')
+snratio = list()
 for cell in cells.iterrows():
     cell = cell[1]
     key_cell = dict(cell)    
     del key_cell['Freq']
-    if imaging.Movie&key_cell:#&'movie_frame_rate>800':
-        #%
-        plot_precision_recall(key_cell,binwidth =  30,frbinwidth = 0.01,firing_rate_window = 3)
-        
-        print(cell)
-        time.sleep(3)
-        #%
+    snratios = (imaging_gt.ROIAPWave()&key_cell).fetch('apwave_snratio')
+    #print(np.mean(snratios[:100]))    
+    snratio.append(np.mean(snratios[:50]))
+cells['SN']=snratio
+print(cells)
 #%%
-data = plot_ephys_ophys_trace(key_cell,time_to_plot=None,trace_window = 100)
+fig=plt.figure()
+ax_hist = fig.add_axes([0,0,1,1])
+ax_hist.hist(snratio)
+ax_hist.set_xlabel('S/N ratio of first 50 spikes')
+ax_hist.set_ylabel('# of cells')
+#%%
+
+cell_index = 1
+binwidth = 30 #s
+firing_rate_window = 1 #s
+frbinwidth = .01
+
+cell = cells.iloc[cell_index]
+key_cell = dict(cell)    
+del key_cell['Freq']
+if imaging.Movie&key_cell:#&'movie_frame_rate>800':
+    #%
+    plot_precision_recall(key_cell,binwidth =  30,frbinwidth = 0.01,firing_rate_window = 3)    
+    print(cell)
+#%%    #%%
+data = plot_ephys_ophys_trace(key_cell,time_to_plot=None,trace_window = 5,show_e_ap_peaks = True,show_o_ap_peaks = True)
+    #%%
+data = plot_ephys_ophys_trace(key_cell,time_to_plot=50,trace_window = 110,show_stimulus = True,show_e_ap_peaks = True,show_o_ap_peaks = True)
     #%%
 
     
@@ -174,6 +196,111 @@ for subject_id,session,cellnum in zip(subject_ids,sessions,cellnums):
                     
                 #break
                 #ax_bin.plot(sweep_number[needed]-sweep_number[needed][0],lag[needed],'o')
+#sample movie
+#%% save movie - IR + voltron
+from pathlib import Path
+import os
+import caiman as cm
+import numpy as np
+#%
+
+def moving_average(a, n=3) :
+    ret = np.cumsum(a,axis = 0, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+#%%
+sample_movie_dir = homefolder+'/Data/Voltage_imaging/sample_movie/'
+files = np.sort(os.listdir(sample_movie_dir))
+fnames_full = list()
+for fname in files:
+    fnames_full.append(os.path.join(sample_movie_dir,fname))
+#%
+m_orig = cm.load(fnames_full[0:10])
+#%
+minvals = np.percentile(m_orig,5,(1,2))
+maxvals = np.percentile(m_orig,95,(1,2)) - minvals 
+#%
+m_now = (m_orig-minvals[:,np.newaxis,np.newaxis])/maxvals[:,np.newaxis,np.newaxis]
+#%
+m_now.play(fr=20, magnification=.5,save_movie = True)  # press q to exit
+#%%
+#%% save movie - motion correction, denoising, etc
+key =  {'session': 1,
+ 'subject_id': 462149,
+ 'cell_number': 1,
+ 'motion_correction_method': 'VolPy',
+ 'roi_type': 'VolPy'}
+# =============================================================================
+# key = {'session': 1,
+#  'subject_id': 456462,
+#  'cell_number': 3,
+#  'motion_correction_method': 'Matlab',
+#  'roi_type': 'SpikePursuit'}
+# =============================================================================
+movie_nums = (imaging_gt.GroundTruthROI()*imaging.Movie()&key).fetch('movie_number')
+movie_name = (imaging_gt.GroundTruthROI()*imaging.Movie()&key &'movie_number = {}'.format(min(movie_nums))).fetch1('movie_name')
+fnames,dirs = (imaging.MovieFile()*imaging_gt.GroundTruthROI()*imaging.Movie()&key &'movie_number = {}'.format(min(movie_nums))).fetch('movie_file_name','movie_file_directory')
+allfnames = list()
+
+for fname,directory in zip(fnames,dirs):
+    allfnames.append(os.path.join(homefolder,directory,fname))
+    
+originaldir = os.path.join(homefolder,directory)
+puthere = originaldir.find('Voltage_imaging')+len('Voltage_imaging')
+denoiseddir = os.path.join(originaldir[:puthere],'denoised_volpy',originaldir[puthere+1:],movie_name)
+volpydir = os.path.join(originaldir[:puthere],'VolPy',originaldir[puthere+1:],movie_name)
+files = os.listdir(denoiseddir)
+for file in files:
+    if movie_name in file and file[-4:] == 'mmap':
+        denoised_file = file
+    if 'memmap_' in file and file[-4:] == 'mmap':
+        motioncorrected_denoised_file = file
+files = os.listdir(volpydir)
+for file in files:
+    if 'memmap_' in file and file[-4:] == 'mmap':
+        volpy_file = file        
+
+m_orig = cm.load(allfnames[:5])
+m_denoised = cm.load(os.path.join(denoiseddir,denoised_file))
+m_mocorr_denoised = cm.load(os.path.join(denoiseddir,motioncorrected_denoised_file))
+m_volpy = cm.load(os.path.join(volpydir,volpy_file))
+#%%
+framenum = 1000
+baseline_window = 200
+offset = int(np.round(baseline_window/2))
+
+m_orig_now = m_orig[:framenum,:,:].copy()
+#m_orig_now =(m_orig_now - np.mean(m_orig_now , axis=0))
+#m_orig_now =np.diff(m_orig_now,axis = 0)
+m_orig_baseline = moving_average(m_orig_now, n=baseline_window)
+m_orig_now = m_orig_now[offset:m_orig_baseline.shape[0]+offset,:,:]/m_orig_baseline
+#%%
+m_volpy_now = m_volpy[:framenum,:,:].copy()
+#m_volpy_now=(m_volpy_now- np.mean(m_volpy_now, axis=0))
+#m_volpy_now =np.diff(m_volpy_now,axis = 0)
+#m_volpy_now  = (m_volpy_now - np.mean(m_volpy_now, axis=(1,2))[:,np.newaxis,np.newaxis])
+m_volpy_baseline = moving_average(m_volpy_now, n=baseline_window)
+m_volpy_now = m_volpy_now[offset:m_volpy_baseline.shape[0]+offset,:,:]/m_volpy_baseline
+#%
+m_denoised_now = m_denoised[:framenum,:,:]#.copy()
+#m_denoised_now=(m_denoised_now- np.mean(m_denoised_now, axis=0))
+#m_denoised_now =np.diff(m_denoised_now,axis = 0)
+#m_denoised_now  = (m_denoised_now - np.mean(m_denoised_now, axis=(1,2))[:,np.newaxis,np.newaxis])
+m_denoised_baseline = moving_average(m_denoised_now, n=baseline_window)
+m_denoised_now = m_denoised_now[offset:m_denoised_baseline.shape[0]+offset,:,:]/m_denoised_baseline 
+
+m_mocorr_denoised_now = m_mocorr_denoised[:framenum,:,:].copy()
+#m_mocorr_denoised_now=(m_mocorr_denoised_now- np.mean(m_mocorr_denoised_now, axis=0))
+#m_mocorr_denoised_now =np.diff(m_mocorr_denoised_now,axis = 0)
+m_mocorr_denoised_baseline = moving_average(m_mocorr_denoised_now, n=baseline_window)
+m_mocorr_denoised_now = m_mocorr_denoised_now[offset:m_mocorr_denoised_baseline.shape[0]+offset,:,:]/m_mocorr_denoised_baseline 
+#%%
+
+m_now =  cm.concatenate([m_orig_now,m_volpy_now, m_denoised_now,m_mocorr_denoised_now], axis=1)
+#%%
+m_now.play(fr=400, magnification=2,q_max=99.9, q_min=0.1,save_movie = True)
+#m_orig = cm.load(allfnames[0:3])
+#m_volpy_now.play(fr=400, magnification=1,q_max=99.5, q_min=0.5,save_movie = False)
 #%% Szar van a palacsintaban
 subject_ids,movie_names,frame_times,sessions,movie_numbers = (imaging.Movie*imaging.MovieFrameTimes()).fetch('subject_id','movie_name','frame_times','session','movie_number')
 for subject_id,movie_name,frame_time,session,movie_number in zip(subject_ids,movie_names,frame_times,sessions,movie_numbers):
@@ -188,4 +315,45 @@ for subject_id,movie_name,frame_time,session,movie_number in zip(subject_ids,mov
         #(imaging.Movie()&key).delete()
     
     
-    
+  #%% comparing denoising to original motion corrected movie with caiman
+# =============================================================================
+# import caiman as cm
+# import os
+# import numpy as np
+# import matplotlib.pyplot as plt
+# from skimage import io as imio
+# basedir ='/groups/svoboda/home/rozsam/Data/'
+# 
+# #data_dir = '/home/rozmar/Data/Voltage_imaging/VolPy/Voltage_rig_1P/rozsam/20191201/40x_patch1' #data_dir = sys.argv[1]
+# out_dir = os.path.join(basedir,'Voltage_imaging/sgpmd-nmf/Voltage_rig_1P/rozsam/20191201/40x_patch1')#out_dir = sys.argv[3]
+# data_dir = out_dir
+# mov_in  = 'memmap__d1_128_d2_512_d3_1_order_C_frames_80000_.mmap'#mov_in = sys.argv[2]
+# denoised = 'denoised.tif'
+# trend = 'trend.tif'
+# dtrend_nnorm = 'detr_nnorm.tif'
+# sn_im = 'Sn_image.tif'
+# #%%
+# i_sn = imio.imread(os.path.join(out_dir,sn_im))[:,:,0]
+# m_orig = cm.load(os.path.join(out_dir,mov_in))
+# m_denoised = cm.load(os.path.join(out_dir,denoised)).transpose(2,0,1)
+# m_trend = cm.load(os.path.join(out_dir,trend)).transpose(2,0,1)
+# #m_denoised_w_trend = m_denoised + m_trend
+# #m_dtrend_nnorm = cm.load(os.path.join(out_dir,dtrend_nnorm)).transpose(2,0,1)
+# #m_noise_substracted = m_orig[:m_denoised.shape[0]]-(m_dtrend_nnorm-m_denoised)*i_sn
+# #%%
+# #m_pwrig = cm.load(mc.mmap_file)
+# ds_ratio = 0.2
+# moviehandle = cm.concatenate([m_orig[:m_denoised.shape[0]].resize(1, 1, ds_ratio),
+#                               m_noise_substracted.resize(1, 1, ds_ratio)], axis=2)
+# 
+# moviehandle.play(fr=60, q_max=99.5, magnification=2)  # press q to exit
+# #%%
+# # % movie subtracted from the mean
+# m_orig2 = (m_orig[:m_denoised.shape[0]] - np.mean(m_orig[:m_denoised.shape[0]], axis=0))
+# m_denoised2 = (m_noise_substracted - np.mean(m_noise_substracted, axis=0))
+# #%%
+# ds_ratio = 0.2
+# moviehandle1 = cm.concatenate([m_orig2.resize(1, 1, ds_ratio),
+#                                m_denoised2.resize(1, 1, ds_ratio),], axis=2)
+# moviehandle1.play(fr=60, q_max=99.5, magnification=2)  
+# =============================================================================
