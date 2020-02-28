@@ -23,9 +23,19 @@ from pipeline import pipeline_tools
 from pipeline import lab, experiment, ephys_patch, ephysanal, imaging, imaging_gt
 import ray
 import time
-from pathlib import Path
+
+homefolder = dj.config['locations.mr_share']
 #%%
 
+def moving_average(a, n=3) : # moving average 
+    if n>2:
+        begn = int(np.ceil(n/2))
+        endn = int(n-begn)-1
+        a = np.concatenate([a[begn::-1],a,a[:-endn:-1]])
+    ret = np.cumsum(a,axis = 0, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+#%%
 @ray.remote
 def apply_motion_correction(movie,shifts):
     movie_corrected=list()
@@ -57,38 +67,36 @@ def populatemytables_gt(paralel = True, cores = 3):
         populatemytables_gt_core(arguments,runround)
     ray.shutdown()
 
+#%%
+def read_tiff(path,ROI_coordinates=None, n_images=100000):
+    """
+    path - Path to the multipage-tiff file
+    n_images - Number of pages in the tiff file
+    """
+    img = Image.open(path)
 
-# =============================================================================
-# def read_tiff(path,ROI_coordinates=None, n_images=100000):
-#     """
-#     path - Path to the multipage-tiff file
-#     n_images - Number of pages in the tiff file
-#     """
-#     img = Image.open(path)
-# 
-#     images = []
-#     #dimensions = np.diff(ROI_coordinates.T).T[0]+1
-#     for i in range(10000000):
-#         try:
-#             img.seek(i)
-#             img.getpixel((1, 1))
-#             imarray = np.array(img)
-#             if ROI_coordinates:
-#                 slice_ = imarray[ROI_coordinates[0][1]:ROI_coordinates[1][1]+1,ROI_coordinates[0][0]:ROI_coordinates[1][0]+1]
-#                 images.append(slice_)
-#             else:
-#                 images.append(imarray)
-#             
-#            # break
-#         except EOFError:
-#             # Not enough frames in img
-#             break
-# 
-#     return np.array(images)
-# =============================================================================
+    images = []
+    #dimensions = np.diff(ROI_coordinates.T).T[0]+1
+    for i in range(10000000):
+        try:
+            img.seek(i)
+            img.getpixel((1, 1))
+            imarray = np.array(img)
+            if ROI_coordinates:
+                slice_ = imarray[ROI_coordinates[0][1]:ROI_coordinates[1][1]+1,ROI_coordinates[0][0]:ROI_coordinates[1][0]+1]
+                images.append(slice_)
+            else:
+                images.append(imarray)
+            
+           # break
+        except EOFError:
+            # Not enough frames in img
+            break
 
+    return np.array(images)
+#%%
 def upload_spike_pursuit_matlab_data(key_now,movie_dir_now):
-    
+    #%%
     files = os.listdir(movie_dir_now)
     movie_x_size, movie_y_size = (imaging.Movie()&key_now).fetch1('movie_x_size','movie_y_size')
     if 'ROIs.mat' in files:
@@ -210,17 +218,20 @@ def upload_spike_pursuit_matlab_data(key_now,movie_dir_now):
     else:
         print(['skipping',print(key_now)])
                     
-
+#%%
         #print(movie_name)      
 
-#@ray.remote
+@ray.remote
 def ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum):
     #%%
 # =============================================================================
-#     key = {'subject_id': 462149, 'session': 1}
-#     movie_number = 6
-#     cellnum = 4
+#     key = {'subject_id': 463291, 'session': 1}
+#     movie_number = 5
+#     cellnum = 1
 # =============================================================================
+    
+    
+    
     plotit = False
     convolve_voltron_kinetics = False
     tau_1_on = .64/1000
@@ -335,7 +346,7 @@ def ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum):
                             e_idx_now[e_idx_now<0] = 0
                             #e_idx_now = np.unique(e_idx_now)
                             e_now = trace_conv[e_idx_now]
-                            #%%
+                            #%
                             if len(e_now) != len(dff_now):
                                 print([key,movie_number,cellnum])
                                 
@@ -375,15 +386,31 @@ def ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum):
                             ax_v.plot(tracetime[list(apmaxidxes)],trace[list(apmaxidxes)]*1000,'ro')
                             #ax_v.set_xlim([end_t-3,end_t])#end_t
                         
-                        t = np.arange(0,.01,1/sample_rate)
-                        f_on = tau_1_ratio_on*np.exp(t/tau_1_on) + (1-tau_1_ratio_on)*np.exp(-t/tau_2_on)
-                        f_off = tau_1_ratio_off*np.exp(t[::-1]/tau_1_off) + (1-tau_1_ratio_off)*np.exp(-t[::-1]/tau_2_off)
-                        f_on = f_on/np.max(f_on)
-                        f_off = f_off/np.max(f_off)
                         
-                        kernel = np.concatenate([f_on,np.zeros(len(f_off))])[::-1]
-                        kernel  = kernel /sum(kernel )
-                        trace_conv = np.convolve(trace,kernel,mode = 'same') 
+                        
+                        t = np.arange(0,.01,1/sample_rate)
+                        
+                        if convolve_voltron_kinetics:
+                            f_on = tau_1_ratio_on*np.exp(t/tau_1_on) + (1-tau_1_ratio_on)*np.exp(-t/tau_2_on)
+                            f_off = tau_1_ratio_off*np.exp(t[::-1]/tau_1_off) + (1-tau_1_ratio_off)*np.exp(-t[::-1]/tau_2_off)
+                            f_on = f_on/np.max(f_on)
+                            f_off = f_off/np.max(f_off)
+                            kernel = np.concatenate([f_on,np.zeros(len(f_off))])[::-1]
+                            kernel  = kernel /sum(kernel )
+                            trace_conv = np.convolve(trace,kernel,mode = 'same') 
+                        else:
+                            trace_conv = trace
+                        
+# =============================================================================
+#                         f_on = tau_1_ratio_on*np.exp(t/tau_1_on) + (1-tau_1_ratio_on)*np.exp(-t/tau_2_on)
+#                         f_off = tau_1_ratio_off*np.exp(t[::-1]/tau_1_off) + (1-tau_1_ratio_off)*np.exp(-t[::-1]/tau_2_off)
+#                         f_on = f_on/np.max(f_on)
+#                         f_off = f_off/np.max(f_off)
+#                         
+#                         kernel = np.concatenate([f_on,np.zeros(len(f_off))])[::-1]
+#                         kernel  = kernel /sum(kernel )
+#                         trace_conv = np.convolve(trace,kernel,mode = 'same') 
+# =============================================================================
                         
                         kernel = np.ones(int(np.round(sample_rate/frame_rate)))
                         kernel  = kernel /sum(kernel )
@@ -398,9 +425,10 @@ def ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum):
                         convolvingdone = True
                     ap_nums,ap_max_times = (ephysanal.ActionPotential()&key&'cell_number ='+str(cellnum) &'sweep_number = '+str(sweep_number)).fetch('ap_num','ap_max_time')
                     #%
+                    #snratios = list()
                     time_back = .02
-                    baseline_time = .1
-                    baseline_time_end = .01
+                    baseline_time = .3
+                    baseline_time_end = .1
                     time_forward = .02
                     step_back = int(np.round(time_back*frame_rate))
                     step_forward = int(np.round(time_forward*frame_rate))
@@ -423,6 +451,7 @@ def ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum):
                            apkey_now = apkey.copy()
                            #f_ap_idxes = np.arange(-step_back,step_forward)+f_max_idx
                            ap_dff = dff_now[f_max_idx-step_back:f_max_idx+step_forward]
+                           ap_dff_filt = dff_filt_now[f_max_idx-step_back:f_max_idx+step_forward]
                            ap_time = dff_time_now[f_max_idx-step_back:f_max_idx+step_forward]-ap_max_time
                            if ap_num>1:
                                baseline_max_idx = np.argmax(dff_time_now>ap_max_times[ap_num-1-np.argmax(np.diff(ap_max_times[:ap_num])[::-1]>baseline_time)])
@@ -434,16 +463,38 @@ def ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum):
                            apkey_now['ap_num'] = ap_num
                            apkey_now['apwave_time'] = ap_time
                            apkey_now['apwave_dff'] = ap_dff
-                           apkey_now['apwave_snratio'] = (np.min(ap_dff[step_back-step_end_baseline:step_back+step_end_baseline])-np.mean(baseline_dff))/np.std(baseline_dff)*-1
+                           
+                           if (np.diff(ap_dff[step_back-1::-1])<0).any:
+                               apstartidx = step_back - (np.diff(ap_dff[step_back-1::-1])<0).argmax()-1
+                           else:
+                               apstartidx = 0
+                           ap_peak_amplitude = ap_dff[apstartidx]-np.min(ap_dff[step_back-1:step_back+3])
+                           
+# =============================================================================
+#                            idxap,temp = scipy.signal.find_peaks(ap_dff_filt*-1)
+#                            neededap = idxap[idxap>=step_back-1]
+#                            neededap = neededap[0]
+#                            ap_peak_amplitude = ap_dff_filt[neededap]*-1
+# =============================================================================
+                           apkey_now['apwave_snratio'] = ap_peak_amplitude/np.std(baseline_dff)
+                           apkey_now['apwave_peak_amplitude'] = ap_peak_amplitude#np.abs(np.min(ap_dff[step_back-step_end_baseline:step_back+step_end_baseline])-np.mean(baseline_dff))
+                           apkey_now['apwave_noise'] = np.std(baseline_dff)
                            apkeys.append(apkey_now)
-            
+                           #snratios.append(apkey_now['apwave_snratio'] )
+# =============================================================================
+#                            if apkey_now['apwave_snratio']<5:
+#                                break
+# =============================================================================
+                           #break
                        #%
                     if len(ap_nums)>0:
                         imaging_gt.ROIAPWave().insert(apkeys,allow_direct_insert=True,skip_duplicates=True)            
             except:
                 print('couldn''t do this one:')
                 print(roikey)
-            
+                #asdasd
+                #time.sleep(1000)
+                
 
 #%%
 def upload_movie_metadata():   
@@ -725,7 +776,8 @@ def calculate_exposition_times():
 #%% save matlab spikepursuit image registration and ROIs
 def save_spikepursuit_pipeline():
     #repodir = '/home/rozmar'
-    spikepursuitfolder = str(Path.home())+'/Data/Voltage_imaging/Spikepursuit/Voltage_rig_1P/rozsam'
+    #%%
+    spikepursuitfolder = homefolder+'/Data/Voltage_imaging/Spikepursuit/Voltage_rig_1P/rozsam'
     dirs = os.listdir(spikepursuitfolder )
     sessiondates = experiment.Session().fetch('session_date')
     for session_now in dirs:
@@ -752,13 +804,14 @@ def save_spikepursuit_pipeline():
                         
                                                                                              
 #%%
-#%% save VolPy image registration and ROIs TODO FINISH THIS!!
+#%% 
 def save_volpy_pipeline(roitype = 'VolPy',motion_corr = 'VolPy'):
     #repodir = '/home/rozmar'
-    if roitype == 'VolPy':
-        volpyfolder = str(Path.home())+'/Data/Voltage_imaging/VolPy/Voltage_rig_1P/rozsam'
-    elif roitype == 'VolPy_denoised':
-        volpyfolder = str(Path.home())+'/Data/Voltage_imaging/denoised_volpy/Voltage_rig_1P/rozsam'
+    #%%
+    if roitype == 'VolPy' or roitype ==  'VolPy_raw':
+        volpyfolder = homefolder +'/Data/Voltage_imaging/VolPy/Voltage_rig_1P/rozsam'
+    elif roitype == 'VolPy_denoised' or roitype == 'VolPy_denoised_raw':
+        volpyfolder = homefolder +'/Data/Voltage_imaging/denoised_volpy/Voltage_rig_1P/rozsam'
     dirs = os.listdir(volpyfolder )
     sessiondates = experiment.Session().fetch('session_date')
     for session_now in dirs:
@@ -839,8 +892,49 @@ def save_volpy_pipeline(roitype = 'VolPy',motion_corr = 'VolPy'):
                                         wherey = np.where(spikepursuit['estimates']['bwexp'][cellid])[1]
                                         mask[wherex[0]:wherex[-1]+1,wherey[0]:wherey[-1]+1] = spikepursuit['estimates']['spatialFilter'][cellid]
     
+                                        #
+# =============================================================================
+#                                         print('waiting')
+#                                         time.sleep(1000)
+# =============================================================================
                                         #%
-    
+                                        if 'raw' in roitype: # a very primitive measure ..
+                                            #%
+                                            files = os.listdir(movie_dir_now)
+                                            for file in files:
+                                                if 'memmap_' in file and file[-4:] == 'mmap':
+                                                    m_file = file
+                                            print(os.path.join(movie_dir_now,m_file))
+                                            try:
+                                                movie = cm.load(os.path.join(movie_dir_now,m_file))
+                                            except:
+                                                print('caiman was not loaded, loading now')
+                                                import caiman as cm
+                                                movie = cm.load(os.path.join(movie_dir_now,m_file))
+                                                #%
+                                            
+                                            ROI = spikepursuit['params']['ROIs'][cellid]
+                                            f = np.mean(movie[:,np.asarray(ROI,bool)],1)
+                                            #%
+                                            fr = spikepursuit['params']['fr']
+                                            f0 = moving_average(f,int(fr*.05))
+                                            dff_raw = (f-f0)/f0
+                                            idxap,apdict = scipy.signal.find_peaks(dff_raw*-1,height = (0,np.inf))
+                                            idxneg,nonapdict = scipy.signal.find_peaks(dff_raw,height = (0,np.inf))
+                                            medianvalue = np.median(nonapdict['peak_heights'])
+                                            peakvals = nonapdict['peak_heights'][nonapdict['peak_heights']>medianvalue]-medianvalue
+                                            peakvals = np.concatenate([peakvals,peakvals*-1])
+                                            sd = np.std(peakvals)
+                                            cutoff = medianvalue+3*sd
+                                            aps =  apdict['peak_heights']>cutoff
+                                            spikeidxes = idxap[aps]+1
+                                            f0 = moving_average(f,int(fr*4))
+                                            dff = (f-f0)/f0
+                                            mask = ROI
+                                            
+                                            #ITT TARTOK!!!
+                                          #%%
+    #%
                                         key_roi = key.copy()
                                         key_roi['movie_number'] = movie_number
                                         key_roi['motion_correction_method'] = motion_corr
@@ -852,14 +946,14 @@ def save_volpy_pipeline(roitype = 'VolPy',motion_corr = 'VolPy'):
                                         key_roi['roi_centroid_x'] = ROI_centroid[1]
                                         key_roi['roi_centroid_y'] = ROI_centroid[0]
                                         key_roi['roi_mask'] = mask
-                                        #%
+                                        #%%
                                         try:
                                             imaging.ROI().insert1(key_roi, allow_direct_insert=True)
                                         except:
                                             print('original spikepursuit ROI already uploaded?')
                                             #%
                                         try:   
-                                            #%
+                                            #%%
                                             t = np.arange(len(f))
                                             out = scipy.optimize.curve_fit(lambda t,a,b,c,aa,bb: a*np.exp(-t/b) + c + aa*np.exp(-t/bb),  t,  f,maxfev=20000)#,bounds=(0, [np.inf,np.inf,np.inf])
                                             a = out[0][0]
@@ -872,8 +966,9 @@ def save_volpy_pipeline(roitype = 'VolPy',motion_corr = 'VolPy'):
                                             key_roi['roi_dff'] = dff
                                             key_roi['roi_f0'] = f0
                                             key_roi['roi_type'] = roitype+'_dexpF0'
-                                            #%
+                                            #%%
                                             imaging.ROI().insert1(key_roi, allow_direct_insert=True)
+                                            #print('I could fit the double exponential')
                                         except:
                                             print('couldn''t fit double exponential? ')
                                             #%
@@ -889,8 +984,8 @@ def upload_gt_correlations_apwaves(cores = 3):
     subject_ids = ephys_patch.Cell().fetch('subject_id')
     sessions = ephys_patch.Cell().fetch('session')
     cellnums = ephys_patch.Cell().fetch('cell_number')
-    #ray.init(num_cpus = cores)
-    #result_ids = []
+    ray.init(num_cpus = cores)
+    result_ids = []
     for subject_id,session,cellnum in zip(subject_ids,sessions,cellnums):
         key = { 'subject_id': subject_id, 'session':session}
         print(key)
@@ -914,10 +1009,10 @@ def upload_gt_correlations_apwaves(cores = 3):
         
         for movie_number in movie_nums:
             print(['movie_number:',movie_number])
-            ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum)
-            #result_ids.append(ROIEphysCorrelation_ROIAPwave_populate.remote(key.copy(),movie_number,cellnum))
-    #ray.get(result_ids)
-    #ray.shutdown()
+            #ROIEphysCorrelation_ROIAPwave_populate(key,movie_number,cellnum)
+            result_ids.append(ROIEphysCorrelation_ROIAPwave_populate.remote(key.copy(),movie_number,cellnum))
+    ray.get(result_ids)
+    ray.shutdown()
             
 
 

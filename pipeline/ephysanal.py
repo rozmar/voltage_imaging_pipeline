@@ -36,7 +36,7 @@ class ActionPotential(dj.Computed):
                 trace_f = ndimage.gaussian_filter(trace,sigma/si)
                 d_trace_f = np.diff(trace_f)/si
                 peaks = d_trace_f > 40
-                peaks = ndimage.morphology.binary_dilation(peaks,np.ones(int(round(.001/si))))
+                peaks = ndimage.morphology.binary_dilation(peaks,np.ones(int(round(.002/si))))
         
                 spikemaxidxes = list()
                 while np.any(peaks):

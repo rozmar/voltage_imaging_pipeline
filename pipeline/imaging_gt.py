@@ -31,6 +31,8 @@ class ROIAPWave(dj.Imported):
     apwave_time                     : longblob
     apwave_dff                      : longblob
     apwave_snratio                  : float
+    apwave_peak_amplitude           : float
+    apwave_noise                    : float
     """
 
 @schema
